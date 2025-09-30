@@ -100,7 +100,7 @@ function App() {
           />
           <input
             type="text"
-            placeholder="Curso que dictas"
+            placeholder="Curso"
             value={docente.curso}
             onChange={(e) => setDocente({ ...docente, curso: e.target.value })}
             className="border-2 border-blue-200 p-3 rounded-lg w-full focus:border-blue-900 focus:outline-none transition"
