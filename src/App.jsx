@@ -1,127 +1,161 @@
-import React, { useState } from "react";
-import { getDocs, query, where, collection } from "firebase/firestore";
-import { db } from "./firebase"; // Importación corregida
-import DisponibilidadForm from "./components/DisponibilidadForm";
-import ListaDisponibilidades from "./components/ListaDisponibilidades";
+import React, { useState, useEffect } from "react";
+import { collection, addDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
+import { db } from "./firebase";
 
 function App() {
-  const [docente, setDocente] = useState({ nombre: "", dni: "" });
-  const [mostrarFormulario, setMostrarFormulario] = useState(false);
+  const [docente, setDocente] = useState({ nombre: "", curso: "" });
+  const [horarioTexto, setHorarioTexto] = useState(""); // Manual: ej. "Lunes 9:00 AM - 12:00 PM, Martes 2:00 PM - 5:00 PM"
   const [mostrarLista, setMostrarLista] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(false); // Para spinner durante query
+  const [dniAdminInput, setDniAdminInput] = useState(""); // Para verificación admin en ver lista
+  const [disponibilidades, setDisponibilidades] = useState([]);
 
-  const handleContinuar = async () => {
-    if (!docente.nombre || !docente.dni) {
-      alert("Por favor, ingresa nombre y DNI");
+  // Verificar DNI admin para mostrar lista
+  const handleVerDisponibilidad = async () => {
+    if (!dniAdminInput) {
+      alert("Ingresa tu DNI de administrador");
+      return;
+    }
+    try {
+      const q = query(collection(db, "admins"), where("dni", "==", dniAdminInput));
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        setMostrarLista(!mostrarLista);
+        setDniAdminInput(""); // Limpia input
+      } else {
+        alert("DNI de administrador no válido");
+      }
+    } catch (error) {
+      alert("Error al verificar DNI admin");
+    }
+  };
+
+  // Guardar disponibilidad manual
+  const guardarDisponibilidades = async () => {
+    if (!docente.nombre || !docente.curso || !horarioTexto.trim()) {
+      alert("Ingresa nombre, curso y describe tu horario manualmente");
       return;
     }
 
-    setLoading(true);
     try {
-      // Query a colección "admins": Busca por DNI (único)
-      const q = query(
-        collection(db, "admins"), // Corregido a "admins"
-        where("dni", "==", docente.dni),
-        where("nombre", "==", docente.nombre) // Verifica también nombre para más seguridad
-      );
-      const querySnapshot = await getDocs(q);
-
-      if (!querySnapshot.empty) {
-        // Existe admin: Habilita modo
-        setIsAdmin(true);
-        alert("¡Acceso de administrador confirmado! ✅");
-      } else {
-        // No es admin: Solo registro normal
-        alert("Registro exitoso. Puedes registrar horarios, pero no ver la lista completa.");
-      }
+      await addDoc(collection(db, "disponibilidades"), {
+        nombre: docente.nombre,
+        curso: docente.curso,
+        descripcion: horarioTexto.trim(), // Todo manual como string
+        creado: new Date()
+      });
+      alert(`¡Horario registrado para ${docente.curso}! ✅`);
+      setHorarioTexto(""); // Limpia
     } catch (error) {
-      console.error("Error al verificar admin:", error);
-      alert("Error al verificar acceso. Intenta de nuevo.");
+      alert("Error al guardar: " + error.message);
     }
-    setMostrarFormulario(true);
-    setLoading(false);
   };
 
-  if (!mostrarFormulario) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-blue-100">
-        <div className="p-8 bg-white shadow-xl rounded-2xl max-w-md w-full mx-4">
-          <div className="text-center mb-6">
-            <h1 className="text-3xl font-bold text-blue-900 mb-2">📚 Registro de Disponbilidad</h1>
-            <p className="text-gray-600">Ingresa tus datos para gestionar horarios</p>
-          </div>
-          <input
-            type="text"
-            placeholder="Nombre completo"
-            value={docente.nombre}
-            onChange={(e) => setDocente({ ...docente, nombre: e.target.value })}
-            className="border-2 border-blue-200 p-3 rounded-lg w-full mb-4 focus:border-blue-900 focus:outline-none transition"
-          />
-          <input
-            type="text"
-            placeholder="DNI (sin puntos ni guiones)"
-            value={docente.dni}
-            onChange={(e) => setDocente({ ...docente, dni: e.target.value })}
-            className="border-2 border-blue-200 p-3 rounded-lg w-full mb-6 focus:border-blue-900 focus:outline-none transition"
-          />
-          <button
-            onClick={handleContinuar}
-            disabled={loading}
-            className="bg-blue-900 text-white px-6 py-3 rounded-lg hover:bg-blue-800 w-full font-semibold transition shadow-md disabled:opacity-50"
-          >
-            {loading ? "Verificando..." : "Continuar"}
-          </button>
-          <p className="text-gray-500 text-sm mt-4 text-center">
-            Si eres administrador, usa tu nombre y DNI registrados en el sistema para ver la disponibilidad completa.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Listener para lista en tiempo real
+  useEffect(() => {
+    if (mostrarLista) {
+      const unsub = onSnapshot(collection(db, "disponibilidades"), (snapshot) => {
+        setDisponibilidades(snapshot.docs.map((doc) => doc.data()));
+      });
+      return () => unsub();
+    }
+  }, [mostrarLista]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 p-6">
       {/* Header */}
       <div className="bg-white shadow-lg rounded-lg p-6 mb-6 flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-blue-900">👨‍🏫 Panel de {docente.nombre}</h1>
-          <p className="text-gray-600">Gestiona tu disponibilidad semanal {isAdmin && "(Modo Admin)"}</p>
+          <h1 className="text-2xl font-bold text-blue-900">👨‍🏫 Panel de Disponibilidad</h1>
+          <p className="text-gray-600">Gestiona horarios de docentes</p>
         </div>
-        {isAdmin && (
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="DNI Admin para ver lista"
+            value={dniAdminInput}
+            onChange={(e) => setDniAdminInput(e.target.value)}
+            className="border-2 border-blue-200 p-2 rounded-lg w-32 focus:border-blue-900"
+          />
           <button
-            onClick={() => setMostrarLista(!mostrarLista)}
-            className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 font-semibold transition"
+            onClick={handleVerDisponibilidad}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-semibold transition"
           >
-            {mostrarLista ? "Ocultar" : "Ver"} Disponibilidad 📊
+            {mostrarLista ? "Ocultar" : "Ver"} 📊
           </button>
-        )}
-      </div>
-      
-      {/* Contenedor dinámico: Centrado si no hay lista, grid si hay */}
-      {mostrarLista ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <DisponibilidadForm docente={docente} />
-          <ListaDisponibilidades />
         </div>
-      ) : (
-        <div className="flex justify-center">
-          <div className="w-full max-w-2xl">
-            <DisponibilidadForm docente={docente} />
-          </div>
+      </div>
+
+      {/* Formulario Único: Nombre, Curso y Horario Manual */}
+      <div className="bg-white shadow-xl rounded-2xl p-6 mb-6 max-w-2xl mx-auto">
+        <h2 className="text-2xl font-bold text-blue-900 mb-4 text-center">🕒 Registro de Horarios</h2>
+        
+        {/* Inputs Nombre y Curso */}
+        <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <input
+            type="text"
+            placeholder="Nombre completo"
+            value={docente.nombre}
+            onChange={(e) => setDocente({ ...docente, nombre: e.target.value })}
+            className="border-2 border-blue-200 p-3 rounded-lg w-full focus:border-blue-900 focus:outline-none transition"
+          />
+          <input
+            type="text"
+            placeholder="Curso que dictas"
+            value={docente.curso}
+            onChange={(e) => setDocente({ ...docente, curso: e.target.value })}
+            className="border-2 border-blue-200 p-3 rounded-lg w-full focus:border-blue-900 focus:outline-none transition"
+          />
+        </div>
+
+        <div className="mb-4 text-center">
+          <p className="text-sm font-semibold text-blue-800">Docente: {docente.nombre} | Curso: {docente.curso}</p>
+        </div>
+
+        {/* Input Manual para Horario */}
+        <div className="mb-6">
+          <label className="block text-sm font-semibold text-blue-900 mb-2 text-center">📅 Describe tu horario manualmente:</label>
+          <textarea
+            placeholder="Escribe tu horario aquí..."
+            value={horarioTexto}
+            onChange={(e) => setHorarioTexto(e.target.value)}
+            rows={3}
+            className="border-2 border-blue-200 p-3 rounded-lg w-full focus:border-blue-900 focus:outline-none transition resize-none"
+          />
+          <p className="text-xs text-gray-600 mt-2 text-center">
+            Ejemplo: Lunes 9:00 AM - 12:00 PM, Miércoles 2:00 PM - 5:00 PM, Viernes 10:00 AM - 1:00 PM
+          </p>
+        </div>
+
+        <button
+          onClick={guardarDisponibilidades}
+          className="bg-blue-900 text-white px-6 py-3 rounded-lg hover:bg-blue-800 w-full font-semibold transition shadow-lg disabled:opacity-50"
+          disabled={!docente.nombre || !docente.curso || !horarioTexto.trim()}
+        >
+          💾 Guardar Horario
+        </button>
+      </div>
+
+      {/* Lista de Disponibilidades (solo si admin y visible) */}
+      {mostrarLista && (
+        <div className="bg-white shadow-xl rounded-2xl p-6 max-w-full">
+          <h2 className="text-2xl font-bold text-blue-900 mb-4 text-center">📋 Disponibilidades</h2>
+          <ul className="space-y-3">
+            {disponibilidades.map((d, i) => (
+              <li key={i} className="p-4 bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg border border-blue-200">
+                <div className="flex items-center justify-between mb-2">
+                  <strong className="text-blue-900 font-bold">{d.nombre}</strong>
+                  <span className="text-sm text-blue-700">📚 {d.curso}</span>
+                </div>
+                <p className="text-lg font-semibold text-blue-800">{d.descripcion}</p>
+                <p className="text-xs text-gray-500 mt-1">Registrado: {d.creado?.toDate().toLocaleDateString()}</p>
+              </li>
+            ))}
+          </ul>
+          {disponibilidades.length === 0 && (
+            <p className="text-center text-gray-500 text-lg">No hay registros aún 😊</p>
+          )}
         </div>
       )}
-      
-      <button
-        onClick={() => {
-          setMostrarFormulario(false);
-          setIsAdmin(false);
-          setMostrarLista(false);
-        }}
-        className="mt-6 bg-gray-600 text-white px-6 py-3 rounded-lg hover:bg-gray-700 font-semibold transition mx-auto block"
-      >
-        Volver a Registro 🔄
-      </button>
     </div>
   );
 }
