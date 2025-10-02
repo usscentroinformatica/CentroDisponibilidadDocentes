@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { collection, addDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase";
+import * as XLSX from 'xlsx'; // Requiere: npm install xlsx
 
 function App() {
   const [docente, setDocente] = useState({ nombre: "", curso: "" });
@@ -48,6 +49,37 @@ function App() {
     } catch (error) {
       alert("Error al guardar: " + error.message);
     }
+  };
+
+  // Exportar a Excel (solo accesible para admin cuando la lista está visible)
+  const exportToExcel = () => {
+    if (disponibilidades.length === 0) {
+      alert("No hay datos para exportar 😊");
+      return;
+    }
+
+    const dataForExcel = disponibilidades.map((d) => ({
+      "👨‍🏫 Nombre": d.nombre,
+      "📚 Curso": d.curso,
+      "🕒 Descripción del Horario": d.descripcion,
+      "📅 Fecha de Registro": d.creado?.toDate().toLocaleDateString('es-ES') || 'N/A',
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(dataForExcel);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Disponibilidades Docentes");
+    
+    // Auto-ajustar columnas para un diseño más limpio
+    const colWidths = [
+      { wch: 20 }, // Nombre
+      { wch: 15 }, // Curso
+      { wch: 40 }, // Descripción
+      { wch: 15 }, // Fecha
+    ];
+    ws['!cols'] = colWidths;
+
+    XLSX.writeFile(wb, `disponibilidades_docentes_${new Date().toISOString().split('T')[0]}.xlsx`);
+    alert("¡Archivo Excel descargado exitosamente! 📊");
   };
 
   // Listener para lista en tiempo real
@@ -135,25 +167,53 @@ function App() {
         </button>
       </div>
 
-      {/* Lista de Disponibilidades (solo si admin y visible) */}
+      {/* Lista de Disponibilidades (solo si admin y visible) - Mejora didáctica: Tabla responsive */}
       {mostrarLista && (
         <div className="bg-white shadow-xl rounded-2xl p-6 max-w-full">
-          <h2 className="text-2xl font-bold text-blue-900 mb-4 text-center">📋 Disponibilidades</h2>
-          <ul className="space-y-3">
-            {disponibilidades.map((d, i) => (
-              <li key={i} className="p-4 bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg border border-blue-200">
-                <div className="flex items-center justify-between mb-2">
-                  <strong className="text-blue-900 font-bold">{d.nombre}</strong>
-                  <span className="text-sm text-blue-700">📚 {d.curso}</span>
-                </div>
-                <p className="text-lg font-semibold text-blue-800">{d.descripcion}</p>
-                <p className="text-xs text-gray-500 mt-1">Registrado: {d.creado?.toDate().toLocaleDateString()}</p>
-              </li>
-            ))}
-          </ul>
-          {disponibilidades.length === 0 && (
-            <p className="text-center text-gray-500 text-lg">No hay registros aún 😊</p>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-2xl font-bold text-blue-900">📋 Disponibilidades de Docentes</h2>
+            <button
+              onClick={exportToExcel}
+              className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 font-semibold transition shadow-md flex items-center gap-2"
+              disabled={disponibilidades.length === 0}
+            >
+              🔒 Solo Admin: 📊 Descargar Excel
+            </button>
+          </div>
+          
+          {disponibilidades.length === 0 ? (
+            <p className="text-center text-gray-500 text-lg py-8">No hay registros aún 😊</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full bg-white border border-blue-200 rounded-lg overflow-hidden">
+                <thead className="bg-gradient-to-r from-blue-900 to-blue-700 text-white">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">👨‍🏫 Nombre</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">📚 Curso</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">🕒 Horario</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">📅 Registrado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-blue-200">
+                  {disponibilidades.map((d, i) => (
+                    <tr key={i} className="hover:bg-blue-50 transition">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-900">{d.nombre}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-blue-700">{d.curso}</td>
+                      <td className="px-6 py-4 text-sm text-blue-800 max-w-md">
+                        <div className="bg-blue-50 p-2 rounded-md">{d.descripcion}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {d.creado?.toDate().toLocaleDateString('es-ES') || 'N/A'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
+          <p className="text-center text-xs text-gray-500 mt-4">
+            Total de registros: {disponibilidades.length} | Usa el botón para exportar a Excel y analizar offline 📈
+          </p>
         </div>
       )}
     </div>
