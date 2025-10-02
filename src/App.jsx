@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { collection, addDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "./firebase";
-import * as XLSX from 'xlsx'; // Requiere: npm install xlsx
+import * as XLSX from 'xlsx';
+import { Trash2, RefreshCw } from 'lucide-react';
 
 function App() {
   const [docente, setDocente] = useState({ nombre: "", curso: "" });
-  const [horarioTexto, setHorarioTexto] = useState(""); // Manual: ej. "Lunes 9:00 AM - 12:00 PM, Martes 2:00 PM - 5:00 PM"
+  const [horarioTexto, setHorarioTexto] = useState("");
   const [mostrarLista, setMostrarLista] = useState(false);
-  const [dniAdminInput, setDniAdminInput] = useState(""); // Para verificación admin en ver lista
+  const [dniAdminInput, setDniAdminInput] = useState("");
   const [disponibilidades, setDisponibilidades] = useState([]);
+  const [registroExistente, setRegistroExistente] = useState(null);
 
   // Verificar DNI admin para mostrar lista
   const handleVerDisponibilidad = async () => {
@@ -21,7 +23,7 @@ function App() {
       const querySnapshot = await getDocs(q);
       if (!querySnapshot.empty) {
         setMostrarLista(!mostrarLista);
-        setDniAdminInput(""); // Limpia input
+        setDniAdminInput("");
       } else {
         alert("DNI de administrador no válido");
       }
@@ -30,7 +32,45 @@ function App() {
     }
   };
 
-  // Guardar disponibilidad manual
+  // Buscar si el docente ya tiene un registro
+  const buscarRegistroExistente = async () => {
+    if (!docente.nombre || !docente.curso) return;
+    
+    try {
+      const q = query(
+        collection(db, "disponibilidades"),
+        where("nombre", "==", docente.nombre),
+        where("curso", "==", docente.curso)
+      );
+      const querySnapshot = await getDocs(q);
+      
+      if (!querySnapshot.empty) {
+        const registro = querySnapshot.docs[0];
+        setRegistroExistente({
+          id: registro.id,
+          ...registro.data()
+        });
+        setHorarioTexto(registro.data().descripcion);
+      } else {
+        setRegistroExistente(null);
+        setHorarioTexto("");
+      }
+    } catch (error) {
+      console.error("Error al buscar registro:", error);
+    }
+  };
+
+  // Ejecutar búsqueda cuando cambien nombre o curso
+  useEffect(() => {
+    if (docente.nombre && docente.curso) {
+      buscarRegistroExistente();
+    } else {
+      setRegistroExistente(null);
+      setHorarioTexto("");
+    }
+  }, [docente.nombre, docente.curso]);
+
+  // Guardar o actualizar disponibilidad
   const guardarDisponibilidades = async () => {
     if (!docente.nombre || !docente.curso || !horarioTexto.trim()) {
       alert("Ingresa nombre, curso y describe tu horario manualmente");
@@ -38,20 +78,49 @@ function App() {
     }
 
     try {
-      await addDoc(collection(db, "disponibilidades"), {
-        nombre: docente.nombre,
-        curso: docente.curso,
-        descripcion: horarioTexto.trim(), // Todo manual como string
-        creado: new Date()
-      });
-      alert(`¡Horario registrado para ${docente.curso}! ✅`);
-      setHorarioTexto(""); // Limpia
+      if (registroExistente) {
+        // ACTUALIZAR registro existente
+        await updateDoc(doc(db, "disponibilidades", registroExistente.id), {
+          descripcion: horarioTexto.trim(),
+          actualizado: new Date()
+        });
+        alert(`¡Horario actualizado para ${docente.curso}! 🔄`);
+      } else {
+        // CREAR nuevo registro
+        await addDoc(collection(db, "disponibilidades"), {
+          nombre: docente.nombre,
+          curso: docente.curso,
+          descripcion: horarioTexto.trim(),
+          creado: new Date(),
+          actualizado: new Date()
+        });
+        alert(`¡Horario registrado para ${docente.curso}! ✅`);
+      }
+      
+      // Limpiar formulario después de guardar
+      setDocente({ nombre: "", curso: "" });
+      setHorarioTexto("");
+      setRegistroExistente(null);
     } catch (error) {
       alert("Error al guardar: " + error.message);
     }
   };
 
-  // Exportar a Excel (solo accesible para admin cuando la lista está visible)
+  // Eliminar registro (solo admin)
+  const eliminarRegistro = async (registroId, nombreDocente) => {
+    if (!window.confirm(`¿Estás seguro de eliminar el registro de ${nombreDocente}?`)) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, "disponibilidades", registroId));
+      alert("Registro eliminado exitosamente ✅");
+    } catch (error) {
+      alert("Error al eliminar: " + error.message);
+    }
+  };
+
+  // Exportar a Excel
   const exportToExcel = () => {
     if (disponibilidades.length === 0) {
       alert("No hay datos para exportar 😊");
@@ -63,18 +132,19 @@ function App() {
       "📚 Curso": d.curso,
       "🕒 Descripción del Horario": d.descripcion,
       "📅 Fecha de Registro": d.creado?.toDate().toLocaleDateString('es-ES') || 'N/A',
+      "🔄 Última Actualización": d.actualizado?.toDate().toLocaleDateString('es-ES') || 'N/A',
     }));
 
     const ws = XLSX.utils.json_to_sheet(dataForExcel);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Disponibilidades Docentes");
     
-    // Auto-ajustar columnas para un diseño más limpio
     const colWidths = [
       { wch: 20 }, // Nombre
       { wch: 15 }, // Curso
       { wch: 40 }, // Descripción
-      { wch: 15 }, // Fecha
+      { wch: 15 }, // Fecha creación
+      { wch: 18 }, // Última actualización
     ];
     ws['!cols'] = colWidths;
 
@@ -82,11 +152,16 @@ function App() {
     alert("¡Archivo Excel descargado exitosamente! 📊");
   };
 
-  // Listener para lista en tiempo real
+  // Listener para lista en tiempo real con ID incluido
   useEffect(() => {
     if (mostrarLista) {
       const unsub = onSnapshot(collection(db, "disponibilidades"), (snapshot) => {
-        setDisponibilidades(snapshot.docs.map((doc) => doc.data()));
+        setDisponibilidades(
+          snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        );
       });
       return () => unsub();
     }
@@ -117,7 +192,7 @@ function App() {
         </div>
       </div>
 
-      {/* Formulario Único: Nombre, Curso y Horario Manual */}
+      {/* Formulario */}
       <div className="bg-white shadow-xl rounded-2xl p-6 mb-6 max-w-2xl mx-auto">
         <h2 className="text-2xl font-bold text-blue-900 mb-4 text-center">🕒 Registro de Horarios</h2>
         
@@ -139,8 +214,18 @@ function App() {
           />
         </div>
 
+        {/* Alerta si ya existe registro */}
+        {registroExistente && (
+          <div className="mb-4 p-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg flex items-center gap-2">
+            <RefreshCw className="text-yellow-600" size={20} />
+            <p className="text-sm font-semibold text-yellow-800">
+              Ya existe un registro para este docente. Si guardas, se actualizará el horario actual.
+            </p>
+          </div>
+        )}
+
         <div className="mb-4 text-center">
-          <p className="text-sm font-semibold text-blue-800">Docente: {docente.nombre} | Curso: {docente.curso}</p>
+          <p className="text-sm font-semibold text-blue-800">Docente: {docente.nombre || "---"} | Curso: {docente.curso || "---"}</p>
         </div>
 
         {/* Input Manual para Horario */}
@@ -160,14 +245,23 @@ function App() {
 
         <button
           onClick={guardarDisponibilidades}
-          className="bg-blue-900 text-white px-6 py-3 rounded-lg hover:bg-blue-800 w-full font-semibold transition shadow-lg disabled:opacity-50"
+          className="bg-blue-900 text-white px-6 py-3 rounded-lg hover:bg-blue-800 w-full font-semibold transition shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
           disabled={!docente.nombre || !docente.curso || !horarioTexto.trim()}
         >
-          💾 Guardar Horario
+          {registroExistente ? (
+            <>
+              <RefreshCw size={20} />
+              🔄 Actualizar Horario
+            </>
+          ) : (
+            <>
+              💾 Guardar Horario Nuevo
+            </>
+          )}
         </button>
       </div>
 
-      {/* Lista de Disponibilidades (solo si admin y visible) - Mejora didáctica: Tabla responsive */}
+      {/* Lista de Disponibilidades */}
       {mostrarLista && (
         <div className="bg-white shadow-xl rounded-2xl p-6 max-w-full">
           <div className="flex justify-between items-center mb-4">
@@ -177,7 +271,7 @@ function App() {
               className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 font-semibold transition shadow-md flex items-center gap-2"
               disabled={disponibilidades.length === 0}
             >
-              🔒 Solo Admin: 📊 Descargar Excel
+              📊 Descargar Excel
             </button>
           </div>
           
@@ -191,19 +285,29 @@ function App() {
                     <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">👨‍🏫 Nombre</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">📚 Curso</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">🕒 Horario</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">📅 Registrado</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">📅 Actualizado</th>
+                    <th className="px-6 py-3 text-center text-sm font-semibold uppercase tracking-wider">🗑️ Acción</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-blue-200">
-                  {disponibilidades.map((d, i) => (
-                    <tr key={i} className="hover:bg-blue-50 transition">
+                  {disponibilidades.map((d) => (
+                    <tr key={d.id} className="hover:bg-blue-50 transition">
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-900">{d.nombre}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-blue-700">{d.curso}</td>
                       <td className="px-6 py-4 text-sm text-blue-800 max-w-md">
                         <div className="bg-blue-50 p-2 rounded-md">{d.descripcion}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {d.creado?.toDate().toLocaleDateString('es-ES') || 'N/A'}
+                        {d.actualizado?.toDate().toLocaleDateString('es-ES') || d.creado?.toDate().toLocaleDateString('es-ES') || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-center">
+                        <button
+                          onClick={() => eliminarRegistro(d.id, d.nombre)}
+                          className="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600 transition inline-flex items-center gap-1"
+                          title="Eliminar registro"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </td>
                     </tr>
                   ))}
